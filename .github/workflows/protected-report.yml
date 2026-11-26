@@ -76,5 +76,6 @@ jobs:
           VERCEL_TELEMETRY_DISABLED: '1'
         run: |
           python3 -B .github/scripts/protect_release.py preflight "$RUNNER_TEMP/report-site"
-          deployment_url=$(vercel deploy --cwd "$RUNNER_TEMP/report-site" --prebuilt --prod --yes --token "$VERCEL_TOKEN")
+          response=$(vercel deploy --cwd "$RUNNER_TEMP/report-site" --prebuilt --prod --yes --json --token "$VERCEL_TOKEN")
+          deployment_url=$(jq -er '.deployment | select(.readyState == "READY") | .url' <<< "$response")
           python3 -B .github/scripts/protect_release.py verify "$deployment_url"
