@@ -111,5 +111,5 @@ jobs:
         run: |
           python3 -B .github/scripts/protect_release.py preflight "$RUNNER_TEMP/report-site" --access "$REPORT_ACCESS" --transcripts "$INCLUDE_TRANSCRIPTS"
           response=$(vercel deploy --cwd "$RUNNER_TEMP/report-site" --prebuilt --prod --yes --json --token "$VERCEL_TOKEN")
-          deployment_url=$(jq -er '.deployment | select(.readyState == "READY") | .url' <<< "$response")
+          deployment_url=$(jq -er '(.deployment // .) | select(.readyState == "READY") | .url | strings' <<< "$response")
           python3 -B .github/scripts/protect_release.py verify "$deployment_url" --access "$REPORT_ACCESS" --transcripts "$INCLUDE_TRANSCRIPTS" --output "$RUNNER_TEMP/report-site"
