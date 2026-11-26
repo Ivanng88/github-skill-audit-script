@@ -36,4 +36,12 @@ Deployments** and checks that both Vercel URLs challenge anonymous requests.
 Explicit `access: public` allows a release from `codex/github-skill-audit` to a
 Vercel project open to anonymous visitors. The workflow compares the deployed
 HTML with the staged HTML and requires HTTP 404 on private file routes at both
-Vercel URLs. Only the rendered HTML is staged for either release mode.
+Vercel URLs. Only rendered HTML is staged for either release mode.
+
+Set `include_transcripts: true` in public mode to add `/transcripts/`. The
+private caller supplies `data/public-transcripts.json` with schema
+`it-public-transcripts/v1`. Each approved record has a unique `id`, a verified
+public video `source_url`, `provenance` (`collector` or `legacy`), `partial`
+(boolean), and transcript-only `text`. The release renders these records as
+escaped HTML, verifies both pages, and keeps both source JSON and raw notes
+off Vercel.

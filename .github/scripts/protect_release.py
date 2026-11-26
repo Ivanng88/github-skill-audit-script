@@ -16,6 +16,7 @@ from urllib.request import HTTPRedirectHandler, Request, build_opener, urlopen
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
 from export_obsidian import build_html, safe_evidence
+from public_transcripts import render_transcript_page
 
 
 CATALOG_FIELDS = {"title", "source", "source_hashes", "published", "categories", "repos"}
@@ -31,11 +32,25 @@ DETAIL_FIELDS = {
 INTERNAL_URL = re.compile(r"(?:docs\.google\.com|drive\.google\.com|facebook\.com|file://|obsidian://)", re.I)
 PRIVATE_FILE = re.compile(r"\bmaster\.md\b|[/\\]transcripts[/\\]", re.I)
 STATIC_REPORT = Path(".vercel/output/static/index.html")
+STATIC_TRANSCRIPTS = Path(".vercel/output/static/transcripts/index.html")
 BUILD_METADATA = Path(".vercel/output/config.json")
-PRIVATE_ROUTES = ("/master.md", "/transcripts/", "/knowledge.md", "/data/audit.json")
+TRANSCRIPTS_ROUTE = "/transcripts/"
+PRIVATE_ROUTES = (
+    "/master.md", "/knowledge.md", "/data/audit.json", "/data/public-transcripts.json",
+    "/transcripts.json", "/transcripts/raw.json",
+)
 
 
-def stage(output, access="protected"):
+def deployment_config(include_transcripts):
+    config = {"version": 3}
+    if include_transcripts:
+        config["routes"] = [{"src": "^/transcripts/?$", "dest": "/transcripts/index.html"}]
+    return config
+
+
+def stage(output, access="protected", include_transcripts=False):
+    if include_transcripts and access != "public":
+        raise ValueError("Transcript publishing requires explicit public access mode")
     raw = (ROOT / "data" / "audit.json").read_text(encoding="utf-8")
     packet = json.loads(raw)
     if not isinstance(packet, dict) or set(packet) != CATALOG_FIELDS or INTERNAL_URL.search(raw):
@@ -62,10 +77,23 @@ def stage(output, access="protected"):
                 or safe_evidence(" ".join(references), name) != references
             ):
                 raise ValueError("Public report contains an unexpected repository or evidence link")
+    if include_transcripts:
+        transcript_page = render_transcript_page(ROOT / "data" / "public-transcripts.json")
     build_html(packet)
+    report_page = (ROOT / "index.html").read_bytes()
+    if include_transcripts:
+        anchor = b'<a href="#catalog">'
+        if report_page.count(anchor) != 1:
+            raise ValueError("Report navigation location is ambiguous")
+        transcript_link = '<a href="/transcripts/">Bản chép lời</a> '.encode("utf-8")
+        report_page = report_page.replace(anchor, transcript_link + anchor, 1)
     (output / STATIC_REPORT).parent.mkdir(parents=True, exist_ok=False)
-    (output / STATIC_REPORT).write_bytes((ROOT / "index.html").read_bytes())
-    (output / BUILD_METADATA).write_text('{"version":3}\n', encoding="utf-8")
+    (output / STATIC_REPORT).write_bytes(report_page)
+    if include_transcripts:
+        (output / STATIC_TRANSCRIPTS).parent.mkdir()
+        (output / STATIC_TRANSCRIPTS).write_text(transcript_page, encoding="utf-8")
+    config = json.dumps(deployment_config(include_transcripts), separators=(",", ":"))
+    (output / BUILD_METADATA).write_text(config + "\n", encoding="utf-8")
 
 
 def required_env(name, pattern):
@@ -124,13 +152,18 @@ def requires_login(url):
         return error.code == 401 and b"Authentication Required" in error.read(8192)
 
 
-def preflight(output, access="protected"):
+def preflight(output, access="protected", include_transcripts=False):
+    if include_transcripts and access != "public":
+        raise ValueError("Transcript publishing requires explicit public access mode")
+    expected_files = {BUILD_METADATA, STATIC_REPORT}
+    if include_transcripts:
+        expected_files.add(STATIC_TRANSCRIPTS)
     entries = list(output.rglob("*"))
     if any(path.is_symlink() for path in entries) or {
         path.relative_to(output) for path in entries if path.is_file()
-    } != {BUILD_METADATA, STATIC_REPORT}:
-        raise ValueError("Deployment folder must contain only the report and build metadata")
-    if json.loads((output / BUILD_METADATA).read_text(encoding="utf-8")) != {"version": 3}:
+    } != expected_files:
+        raise ValueError("Deployment folder contains unexpected files or missing approved pages")
+    if json.loads((output / BUILD_METADATA).read_text(encoding="utf-8")) != deployment_config(include_transcripts):
         raise ValueError("Unexpected deployment metadata")
     project_id, team_id, _ = assert_project(access)
     (output / ".vercel" / "project.json").write_text(
@@ -150,8 +183,9 @@ def public_html_matches(opener, url, expected_size, expected_digest):
         return False
 
 
-def verify_public_routes(opener, url):
-    for route in PRIVATE_ROUTES:
+def verify_public_routes(opener, url, include_transcripts=False):
+    routes = PRIVATE_ROUTES if include_transcripts else PRIVATE_ROUTES + (TRANSCRIPTS_ROUTE, "/transcripts/index.html")
+    for route in routes:
         try:
             with opener.open(Request(url + route), timeout=15):
                 pass
@@ -161,22 +195,32 @@ def verify_public_routes(opener, url):
         raise ValueError(f"Public deployment exposes or redirects a private file route: {route}")
 
 
-def verify(url, access="protected", output=None):
+def verify(url, access="protected", output=None, include_transcripts=False):
+    if include_transcripts and access != "public":
+        raise ValueError("Transcript publishing requires explicit public access mode")
     if not re.fullmatch(r"https://[a-z0-9-]+\.vercel\.app/?", url):
         raise ValueError("Vercel CLI returned an unexpected deployment URL")
     _, _, production = assert_project(access)
     if access == "public":
         if output is None:
             raise ValueError("Public verification requires the staged release path")
-        report = (output / STATIC_REPORT).read_bytes()
-        expected_digest = sha256(report).digest()
+        paths = {"": STATIC_REPORT}
+        if include_transcripts:
+            paths[TRANSCRIPTS_ROUTE] = STATIC_TRANSCRIPTS
+        expected_pages = {}
+        for route, path in paths.items():
+            page = (output / path).read_bytes()
+            expected_pages[route] = (len(page), sha256(page).digest())
         opener = build_opener(NoRedirect)
     for target in (url.rstrip("/"), f"https://{production}"):
         for attempt in range(5):
             if access == "protected" and requires_login(target):
                 break
-            if access == "public" and public_html_matches(opener, target, len(report), expected_digest):
-                verify_public_routes(opener, target)
+            if access == "public" and all(
+                public_html_matches(opener, target + route, size, digest)
+                for route, (size, digest) in expected_pages.items()
+            ):
+                verify_public_routes(opener, target, include_transcripts)
                 break
             if attempt == 4:
                 raise ValueError(f"Deployment does not match the expected {access} report")
@@ -189,12 +233,14 @@ if __name__ == "__main__":
     parser.add_argument("action", choices=("stage", "preflight", "verify"))
     parser.add_argument("target")
     parser.add_argument("--access", choices=("protected", "public"), default="protected")
+    parser.add_argument("--transcripts", choices=("true", "false"), default="false")
     parser.add_argument("--output", type=Path)
     args = parser.parse_args()
+    include_transcripts = args.transcripts == "true"
     try:
         if args.action == "verify":
-            verify(args.target, args.access, args.output)
+            verify(args.target, args.access, args.output, include_transcripts)
         else:
-            {"stage": stage, "preflight": preflight}[args.action](Path(args.target), args.access)
+            {"stage": stage, "preflight": preflight}[args.action](Path(args.target), args.access, include_transcripts)
     except (OSError, ValueError, KeyError, URLError) as error:
         parser.exit(1, f"Release rejected: {error}\n")
