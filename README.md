@@ -31,6 +31,9 @@ Provide that same commit as `scripts_sha`. Leave `deploy` off to validate only.
 
 Set `deploy` and supply the Vercel project ID, team ID, production hostname,
 and an explicitly mapped Vercel secret from the private caller to release.
-The project must require Vercel Authentication for **All Deployments**.
-The workflow stages only the rendered HTML and checks that both Vercel URLs
-challenge anonymous requests.
+The default `access: protected` requires Vercel Authentication for **All
+Deployments** and checks that both Vercel URLs challenge anonymous requests.
+Explicit `access: public` allows a release from `codex/github-skill-audit` to a
+Vercel project open to anonymous visitors. The workflow compares the deployed
+HTML with the staged HTML and requires HTTP 404 on private file routes at both
+Vercel URLs. Only the rendered HTML is staged for either release mode.
