@@ -21,3 +21,16 @@ Point `--knowledge-root` to a directory containing `Repository Atlas` and `Conti
 Review generated output before sharing it. The exporter filters some sensitive values, but your notes can still contain confidential information. Generated outputs are ignored by Git.
 
 If CodeGraph is already installed, use `python3 audit.py codegraph --help` for the optional local index commands.
+
+## GitHub Actions
+
+Pull requests and pushes to `main` validate the synthetic catalog. A private
+repository may call `.github/workflows/protected-report.yml` at a pinned commit
+to validate its own `index.html`, `data/audit.json`, and `knowledge.md`.
+Provide that same commit as `scripts_sha`. Leave `deploy` off to validate only.
+
+Set `deploy` and supply the Vercel project ID, team ID, production hostname,
+and an explicitly mapped Vercel secret from the private caller to release.
+The project must require Vercel Authentication for **All Deployments**.
+The workflow stages only the rendered HTML and checks that both Vercel URLs
+challenge anonymous requests.

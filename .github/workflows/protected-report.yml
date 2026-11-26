@@ -1,0 +1,72 @@
+name: Validate and deploy a protected report
+
+on:
+  workflow_call:
+    inputs:
+      scripts_sha:
+        required: true
+        type: string
+      deploy:
+        default: false
+        type: boolean
+      project_id:
+        type: string
+      team_id:
+        type: string
+      production_host:
+        type: string
+    secrets:
+      vercel_token:
+        required: false
+
+permissions:
+  contents: read
+
+jobs:
+  release:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Require a private caller and fixed script revision
+        shell: bash
+        env:
+          PRIVATE_CALLER: ${{ github.event.repository.private }}
+          SCRIPTS_SHA: ${{ inputs.scripts_sha }}
+        run: |
+          test "$PRIVATE_CALLER" = true
+          [[ "$SCRIPTS_SHA" =~ ^[0-9a-f]{40}$ ]]
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          repository: Ivanng88/github-skill-audit-script
+          ref: ${{ inputs.scripts_sha }}
+          persist-credentials: false
+      - name: Read the report at the triggering commit
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p data
+          for report_file in index.html data/audit.json knowledge.md; do
+            gh api "repos/$GITHUB_REPOSITORY/contents/$report_file?ref=$GITHUB_SHA" \
+              --header 'Accept: application/vnd.github.raw+json' > "$report_file"
+          done
+      - name: Verify the report and render the site from the catalog
+        run: |
+          python3 -B audit.py check
+          python3 -B .github/scripts/protect_release.py stage "$RUNNER_TEMP/report-site"
+      - name: Install the deployment CLI
+        if: inputs.deploy
+        run: npm install --global --ignore-scripts vercel@67.0.0
+      - name: Deploy only the login-protected report
+        if: inputs.deploy
+        shell: bash
+        env:
+          VERCEL_TOKEN: ${{ secrets.vercel_token }}
+          VERCEL_PROJECT_ID: ${{ inputs.project_id }}
+          VERCEL_ORG_ID: ${{ inputs.team_id }}
+          VERCEL_PRODUCTION_HOST: ${{ inputs.production_host }}
+          VERCEL_TELEMETRY_DISABLED: '1'
+        run: |
+          python3 -B .github/scripts/protect_release.py preflight "$RUNNER_TEMP/report-site"
+          deployment_url=$(vercel deploy --cwd "$RUNNER_TEMP/report-site" --prebuilt --prod --yes --token "$VERCEL_TOKEN")
+          python3 -B .github/scripts/protect_release.py verify "$deployment_url"

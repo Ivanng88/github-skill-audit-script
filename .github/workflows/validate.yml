@@ -1,0 +1,25 @@
+name: Validate script and example
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - name: Export and validate the synthetic catalog
+        run: |
+          python3 -B export_obsidian.py --knowledge-root examples/atlas --atlas-date 2000-01-01
+          python3 -B audit.py render
+          python3 -B audit.py check
+          python3 -B audit.py find example --json | python3 -c 'import json, sys; result = json.load(sys.stdin); assert result["matches"] == 1 and result["repos"][0]["repo"] == "example/demo"'
