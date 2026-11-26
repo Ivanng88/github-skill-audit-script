@@ -57,6 +57,14 @@ jobs:
       - name: Install the deployment CLI
         if: inputs.deploy
         run: npm install --global --ignore-scripts vercel@67.0.0
+      - name: Require the latest catalog on the report branch
+        if: inputs.deploy
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          current=$(gh api --method GET "repos/$GITHUB_REPOSITORY/contents/data/audit.json"             -f ref="$GITHUB_REF_NAME" --jq .sha)
+          test "$(git hash-object data/audit.json)" = "$current"
       - name: Deploy only the login-protected report
         if: inputs.deploy
         shell: bash
